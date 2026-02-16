@@ -1638,11 +1638,23 @@ document.addEventListener('DOMContentLoaded', function () {
         document.body.classList.remove('overflow-hidden');
     });
     document.getElementById('add-graph-btn').addEventListener('click', function () { document.getElementById('add-graph-modal').classList.remove('hidden'); });
-    document.getElementById('filter-btn').addEventListener('click', function () { document.getElementById('filters-modal').classList.remove('hidden'); });
+    document.getElementById('filter-btn').addEventListener('click', function () {
+        const m = document.getElementById('filters-modal');
+        m.classList.remove('hidden');
+        m.classList.add('flex');
+    });
     document.getElementById('close-add-graph-modal').addEventListener('click', function () { document.getElementById('add-graph-modal').classList.add('hidden'); });
-    document.getElementById('close-filters-modal').addEventListener('click', function () { document.getElementById('filters-modal').classList.add('hidden'); });
+    document.getElementById('close-filters-modal').addEventListener('click', function () {
+        const m = document.getElementById('filters-modal');
+        m.classList.add('hidden');
+        m.classList.remove('flex');
+    });
     document.getElementById('cancel-graph').addEventListener('click', function () { document.getElementById('add-graph-modal').classList.add('hidden'); });
-    document.getElementById('cancel-filters').addEventListener('click', function () { document.getElementById('filters-modal').classList.add('hidden'); });
+    document.getElementById('cancel-filters').addEventListener('click', function () {
+        const m = document.getElementById('filters-modal');
+        m.classList.add('hidden');
+        m.classList.remove('flex');
+    });
     document.querySelectorAll('.graph-preset[data-type]').forEach(function (p) { p.addEventListener('click', function () { document.querySelectorAll('.graph-preset[data-type]').forEach(function (x) { x.classList.remove('selected'); }); this.classList.add('selected'); }); });
     document.querySelectorAll('.graph-preset[data-preset]').forEach(function (p) { p.addEventListener('click', function () { document.querySelectorAll('.graph-preset[data-preset]').forEach(function (x) { x.classList.remove('selected'); }); this.classList.add('selected'); }); });
     document.getElementById('create-graph').addEventListener('click', function () {
@@ -1707,7 +1719,9 @@ function openNotes(habitId) {
     document.getElementById('notes-habit-name').textContent = h.name + ' Notes';
     if (!h.notes) h.notes = [];
     renderNotes();
-    document.getElementById('notes-modal').classList.remove('hidden');
+    const m = document.getElementById('notes-modal');
+    m.classList.remove('hidden');
+    m.classList.add('flex');
 }
 
 function renderNotes() {
@@ -1759,7 +1773,9 @@ document.addEventListener('click', function (e) {
         document.querySelectorAll('.kebab-dropdown').forEach(function (d) { d.classList.remove('show'); });
     }
     if (e.target.id === 'close-notes-modal' || e.target.closest('#close-notes-modal')) {
-        document.getElementById('notes-modal').classList.add('hidden');
+        const m = document.getElementById('notes-modal');
+        m.classList.add('hidden');
+        m.classList.remove('flex');
     }
     if (e.target.id === 'add-note-btn' || e.target.closest('#add-note-btn')) {
         addNote();
@@ -1832,3 +1848,203 @@ document.addEventListener('DOMContentLoaded', function () {
         });
     }
 });
+
+// ==========================================
+//  AUTH & CLOUD SYNC INTEGRATION
+// ==========================================
+
+// ==========================================
+//  AUTH & CLOUD SYNC INTEGRATION
+// ==========================================
+
+var currentUser = null;
+
+// 1. Initialize Auth on Load
+document.addEventListener('DOMContentLoaded', async function () {
+    try {
+        // Init Supabase Auth
+        // Wait for auth.js to be ready (it's a script tag, so functions are global)
+        if (typeof initAuth === 'function') {
+            currentUser = await initAuth();
+            updateProfileUI();
+
+            // Load Data
+            if (currentUser) {
+                console.log("📥 Fetching cloud data for user:", currentUser.email);
+                const cloudData = await loadUserData(currentUser.id);
+                if (cloudData) {
+                    console.log("✅ Cloud data found, overwriting local state.");
+                    // Merge cloud data into appState
+                    Object.assign(appState, cloudData);
+                    // Re-attach functions (since JSON loses them)
+                    rehydrateState();
+                    saveState(false); // Save to local but don't re-upload immediately
+                    showToast('Synced with cloud!', 'success');
+                } else {
+                    console.log("⚠️ No cloud data found. Uploading local data as initial state.");
+                    // New user or first time sync: Upload current local data
+                    await saveUserData(currentUser.id, appState);
+                }
+            } else {
+                console.log("👤 Guest mode.");
+            }
+        }
+    } catch (e) {
+        console.error("Auth Init Error:", e);
+        showToast('Error connecting to cloud', 'error');
+    } finally {
+        // Render App
+        renderHabits();
+        updateStats();
+        renderCalendar();
+        renderAchievements();
+        setDailyQuote();
+    }
+});
+
+// 2. Override saveState to sync with cloud
+const originalSaveState = saveState;
+saveState = function (uploadToCloud = true) {
+    // 1. Save to LocalStorage (Standard behavior)
+    const s = Object.assign({}, appState);
+    s.today = null; // Don't save Date object
+    localStorage.setItem('habitHeroState', JSON.stringify(s));
+
+    // 2. Sync to Cloud (if logged in)
+    if (currentUser && uploadToCloud) {
+        // Debounce or just fire and forget
+        // For simplicity, we fire and forget here, but in prod you'd want debouncing
+        saveUserData(currentUser.id, s).catch(err => console.error("Cloud Sync Failed", err));
+    }
+};
+
+// Helper to restore function methods after JSON load
+function rehydrateState() {
+    appState.today = new Date();
+    // Default Rewards Checks
+    var defaultChecks = {
+        1: function (s) { return s.longestStreak >= 7; },
+        2: function (s) { return Object.values(s.completedDays).filter(function (v) { return v === 'completed'; }).length >= 30; },
+        3: function (s) { return s.level >= 10; }
+    };
+    appState.rewards.forEach(function (r) {
+        if (defaultChecks[r.id]) r.check = defaultChecks[r.id];
+    });
+}
+
+// 3. UI Functions
+
+function updateProfileUI() {
+    const emailDisplay = document.getElementById('user-email-display');
+    const signInBtn = document.getElementById('nav-signin');
+    const signOutBtn = document.getElementById('nav-signout');
+
+    if (currentUser) {
+        if (emailDisplay) emailDisplay.textContent = currentUser.email;
+        if (signInBtn) signInBtn.classList.add('hidden'); // Hide Sign In
+        if (signOutBtn) signOutBtn.classList.remove('hidden'); // Show Sign Out
+    } else {
+        if (emailDisplay) emailDisplay.textContent = 'Guest User';
+        if (signInBtn) signInBtn.classList.remove('hidden'); // Show Sign In
+        if (signOutBtn) signOutBtn.classList.add('hidden'); // Hide Sign Out
+    }
+}
+
+// Modal Controls
+function openAuthModal() {
+    const modal = document.getElementById('auth-modal');
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    // Default to Login
+    isLoginMode = true;
+    updateAuthModalUI();
+}
+
+function closeAuthModal() {
+    const modal = document.getElementById('auth-modal');
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    document.getElementById('auth-error').classList.add('hidden');
+    document.getElementById('auth-form').reset();
+}
+
+// Toggle Login/Signup
+let isLoginMode = true;
+function toggleAuthMode() {
+    isLoginMode = !isLoginMode;
+    updateAuthModalUI();
+}
+
+function updateAuthModalUI() {
+    const title = document.getElementById('auth-title');
+    const subtitle = document.getElementById('auth-subtitle');
+    const submitBtn = document.getElementById('auth-submit-btn');
+    const switchText = document.getElementById('auth-switch-text');
+    const switchBtn = document.getElementById('auth-switch-btn');
+
+    if (isLoginMode) {
+        title.textContent = 'Welcome Back';
+        subtitle.textContent = 'Sign in to sync your habits';
+        submitBtn.textContent = 'Sign In';
+        switchText.textContent = "Don't have an account?";
+        switchBtn.textContent = 'Sign Up';
+    } else {
+        title.textContent = 'Create Account';
+        subtitle.textContent = 'Start your journey today';
+        submitBtn.textContent = 'Sign Up';
+        switchText.textContent = "Already have an account?";
+        switchBtn.textContent = 'Sign In';
+    }
+}
+
+// Form Submission
+document.getElementById('auth-form')?.addEventListener('submit', async function (e) {
+    e.preventDefault();
+    const email = document.getElementById('auth-email').value;
+    const password = document.getElementById('auth-password').value;
+    const errorBox = document.getElementById('auth-error');
+    const errorText = document.getElementById('auth-error-text');
+    const submitBtn = document.getElementById('auth-submit-btn');
+
+    // Reset error
+    errorBox.classList.add('hidden');
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Processing...';
+
+    try {
+        if (isLoginMode) {
+            await authLogin(email, password);
+            showToast('Welcome back! Syncing...', 'success');
+            setTimeout(() => window.location.reload(), 1000); // Reload to load cloud data
+        } else {
+            await authSignup(email, password);
+            showToast('Account created! Please check your email.', 'success');
+            // Supabase usually requires email confirmation, or auto-logs in. 
+            // If default config, it might auto-login.
+            setTimeout(() => window.location.reload(), 1500);
+        }
+        closeAuthModal();
+    } catch (err) {
+        console.error(err);
+        errorText.textContent = err.message || "Authentication failed";
+        errorBox.classList.remove('hidden');
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = isLoginMode ? 'Sign In' : 'Sign Up';
+    }
+});
+
+function handleGoogleLogin() {
+    authLoginGoogle().catch(err => {
+        console.error(err);
+        showToast('Google Login failed', 'error');
+    });
+}
+
+function handleLogout() {
+    if (confirm('Are you sure you want to sign out?')) {
+        authLogout().then(() => {
+            window.location.reload();
+        });
+    }
+}
