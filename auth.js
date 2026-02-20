@@ -3,7 +3,7 @@
 // ============================================================
 
 // 1. Supabase Client
-const supabaseUrl = 'https://ccnhrrjevjqbqhqhrtdul.supabase.co';
+const supabaseUrl = 'https://ccnhrrjevjqbqqhrtdul.supabase.co';
 const supabaseKey = 'sb_publishable_3d62WDRM2NwNHeydCNOYCw_vkxaH4hY';
 const supabaseClient = supabase.createClient(supabaseUrl, supabaseKey);
 
