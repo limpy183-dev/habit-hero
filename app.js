@@ -154,7 +154,7 @@ const ACHIEVEMENTS = [
     { id: 'comeback_10', name: 'Phoenix', icon: 'fa-feather', desc: '10 comebacks', check: s => s.comebacks >= 10 },
     { id: 'comeback_20', name: 'Eternal Phoenix', icon: 'fa-fire-flame-curved', desc: '20 comebacks', check: s => s.comebacks >= 20 },
     // --- Misc / Engagement (40) ---
-    { id: 'night_owl', name: 'Night Owl', icon: 'fa-moon', desc: 'Complete a habit (any time)', check: s => s.totalHabitsCompleted >= 1 },
+    { id: 'night_owl', name: 'Night Owl', icon: 'fa-moon', desc: 'Complete a habit after 8 PM', check: s => s.nightOwlUnlocked === true },
     { id: 'early_bird', name: 'Early Bird', icon: 'fa-sun', desc: 'Complete 3 habits in one day', check: s => s.habits.filter(h => h.completedToday).length >= 3 },
     { id: 'multi_tasker', name: 'Multi-Tasker', icon: 'fa-list-check', desc: 'Have 3+ active habits', check: s => s.habits.length >= 3 },
     { id: 'diverse', name: 'Well Rounded', icon: 'fa-circle-nodes', desc: 'Have 5+ active habits', check: s => s.habits.length >= 5 },
@@ -365,7 +365,15 @@ function getDefault() {
         completedDays: {}, graphs: [], activeFilters: {}, unlockedAchievements: [],
         darkMode: false, lastCompletedDate: null, accentColor: 'green',
         dataExported: 0, dataImported: 0, habitsEdited: 0, habitsDeleted: 0,
-        graphsCreated: 0, pagesVisited: [], accentsUsed: ['green'], gemChestsToday: 0
+        graphsCreated: 0, pagesVisited: [], accentsUsed: ['green'], gemChestsToday: 0,
+        nightOwlUnlocked: false,
+        notifSettings: {
+            dailyReminder: false,
+            reminderTime: 9,
+            streakAlert: false,
+            achievementNotifs: true,
+            weeklySummary: false
+        }
     };
 }
 var appState = getDefault();
@@ -384,6 +392,8 @@ function loadState() {
     if (!appState.graphsCreated) appState.graphsCreated = 0;
     if (!appState.pagesVisited) appState.pagesVisited = [];
     if (!appState.accentsUsed) appState.accentsUsed = ['green'];
+    if (!appState.notifSettings) appState.notifSettings = { dailyReminder: false, reminderTime: 9, streakAlert: false, achievementNotifs: true, weeklySummary: false };
+    if (appState.nightOwlUnlocked === undefined) appState.nightOwlUnlocked = false;
     // Re-attach check functions to default rewards (functions don't survive JSON serialization)
     var defaultChecks = {
         1: function (s) { return s.longestStreak >= 7; },
@@ -466,6 +476,11 @@ function checkAchievements() {
                 if (a.check(appState)) {
                     appState.unlockedAchievements.push(a.id);
                     showToast('Achievement Unlocked: ' + a.name + '!', 'warning');
+
+                    if (appState.notifSettings && appState.notifSettings.achievements) {
+                        sendNotification('Achievement Unlocked: ' + a.name + '!', 'Achievement: ' + a.desc);
+                    }
+
                     // Generate a claimable reward for this achievement
                     var alreadyExists = appState.rewards.some(function (r) { return r.achievementId === a.id; });
                     if (!alreadyExists) {
@@ -496,12 +511,17 @@ function renderAchievements() {
         var d = document.createElement('div');
         d.className = 'achievement-item rounded-xl p-2 flex flex-col items-center text-center cursor-pointer ' + (u ? 'unlocked' : 'locked');
         d.title = a.name + ': ' + a.desc;
-        d.innerHTML = '<div class="w-10 h-10 rounded-full flex items-center justify-center mb-1 ' + (u ? 'bg-yellow-200' : 'bg-gray-100 dark:bg-slate-700') + '"><i class="fas ' + (u ? a.icon : 'fa-lock') + ' ' + (u ? 'text-yellow-600' : 'text-gray-400 dark:text-gray-500') + '"></i></div><span class="text-xs font-medium ' + (u ? '' : 'text-gray-400 dark:text-gray-500') + '">' + a.name + '</span>';
+        var iconBg = u ? 'bg-yellow-200' : 'bg-gray-200 dark:bg-slate-700';
+        var iconClass = u ? a.icon : 'fa-lock';
+        var iconColor = u ? 'text-yellow-600' : 'text-gray-500 dark:text-gray-500';
+        var nameColor = u ? 'text-yellow-800 dark:text-yellow-300' : 'text-gray-600 dark:text-gray-500';
+        d.innerHTML = '<div class="w-10 h-10 rounded-full flex items-center justify-center mb-1 ' + iconBg + '"><i class="fas ' + iconClass + ' ' + iconColor + '"></i></div><span class="text-xs font-medium ' + nameColor + '">' + a.name + '</span>';
         c.appendChild(d);
     });
     var ct = document.getElementById('achievement-count');
     if (ct) ct.textContent = '(' + appState.unlockedAchievements.length + '/' + ACHIEVEMENTS.length + ')';
 }
+
 
 function createHabit(name, icon, color, gems, description, targetDays) {
     return { id: Date.now() + Math.floor(Math.random() * 1000), name: name, icon: icon, color: color, streak: 0, completedToday: false, gems: gems, description: description, monthlyCompletions: {}, notes: [], targetDays: targetDays || ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] };
@@ -536,6 +556,11 @@ function updateStats() {
     // Update streak freeze text
     var freezeText = document.getElementById('streak-freeze-text');
     if (freezeText) freezeText.textContent = appState.streakFreezes + ' day streak freeze available';
+    // Sync profile stats
+    var profileGemCount = document.getElementById('profile-gem-count');
+    if (profileGemCount) profileGemCount.textContent = appState.gems + ' Gems';
+    var profileLevel = document.getElementById('profile-level-display');
+    if (profileLevel) profileLevel.textContent = 'Level ' + appState.level;
 }
 
 function renderHabits(filter) {
@@ -934,7 +959,19 @@ function completeHabit(habitId) {
     var h = null;
     for (var i = 0; i < appState.habits.length; i++) { if (appState.habits[i].id === habitId) { h = appState.habits[i]; break; } }
     if (!h || h.completedToday) return;
-    h.completedToday = true; h.streak++; appState.gems += h.gems; appState.totalHabitsCompleted++; appState.totalGemsEarned += h.gems;
+
+    var gemsEarned = h.gems;
+    var isDoubleXPActive = appState.doubleXP && appState.doubleXPExpiry && new Date() < new Date(appState.doubleXPExpiry);
+    if (isDoubleXPActive) {
+        gemsEarned *= 2;
+    }
+
+    h.completedToday = true; h.streak++; appState.gems += gemsEarned; appState.totalHabitsCompleted++; appState.totalGemsEarned += gemsEarned;
+    // Night Owl achievement: completing a habit after 8 PM
+    var currentHour = new Date().getHours();
+    if (currentHour >= 20 && !appState.nightOwlUnlocked) {
+        appState.nightOwlUnlocked = true;
+    }
     var mk = appState.currentYear + '-' + appState.currentMonth;
     h.monthlyCompletions[mk] = (h.monthlyCompletions[mk] || 0) + 1;
     var tk = appState.today.getFullYear() + '-' + appState.today.getMonth() + '-' + appState.today.getDate();
@@ -947,13 +984,21 @@ function completeHabit(habitId) {
         appState.completedToday = true;
         appState.lastCompletedDate = new Date().toDateString();
     } else { appState.completedDays[tk] = 'partial'; }
-    addXP(h.gems);
-    showToast(h.name + ' completed! +' + h.gems + ' Gems', 'success');
+    addXP(gemsEarned);
+
+    var toastMessage = h.name + ' completed! +' + gemsEarned + ' Gems';
+    if (isDoubleXPActive) {
+        toastMessage += ' (Double XP!)';
+    }
+    showToast(toastMessage, 'success');
+
     renderHabits(); updateGemDisplay(); renderHabitPerformance(); renderCalendar(); updateStats(); checkAchievements(); saveState();
     if (allDone) {
         document.getElementById('celebration-modal').classList.remove('hidden');
         document.getElementById('celebration-message').textContent = 'You have completed all habits for ' + appState.currentStreak + ' days in a row!';
-        document.getElementById('reward-amount').textContent = '+' + appState.habits.reduce(function (s, x) { return s + x.gems; }, 0) + ' Gems';
+        var totalDailyGems = appState.habits.reduce(function (s, x) { return s + x.gems; }, 0);
+        if (isDoubleXPActive) totalDailyGems *= 2;
+        document.getElementById('reward-amount').textContent = '+' + totalDailyGems + ' Gems';
         playCelebration();
     }
 }
@@ -1489,7 +1534,8 @@ function showPage(pageId) {
     if (al) { al.classList.remove('text-gray-500'); al.classList.add('text-accent'); }
     if (pageId === 'rewards') renderRewards();
     if (pageId === 'progress') { initProgressChart(); renderAdditionalGraphs(); }
-    if (pageId === 'profile') { renderAchievements(); renderProfileHabits(); }
+    if (pageId === 'profile') { renderAchievements(); renderProfileHabits(); updateProfileUI(); }
+    if (pageId === 'settings') { updateProfileUI(); }
 }
 
 // ===== WEEKLY SUMMARY =====
@@ -1571,7 +1617,7 @@ function initApp() {
     } else {
         renderAdditionalGraphs();
     }
-    checkAchievements(); saveState();
+    saveState();
 
     // Notification Check
     if ("Notification" in window && Notification.permission === "granted" && !sessionStorage.getItem('notified')) {
@@ -1637,44 +1683,62 @@ document.addEventListener('DOMContentLoaded', function () {
         document.getElementById('add-habit-modal').classList.add('hidden');
         document.body.classList.remove('overflow-hidden');
     });
-    document.getElementById('add-graph-btn').addEventListener('click', function () { document.getElementById('add-graph-modal').classList.remove('hidden'); });
-    document.getElementById('filter-btn').addEventListener('click', function () {
+    var addGraphBtn = document.getElementById('add-graph-btn');
+    if (addGraphBtn) addGraphBtn.addEventListener('click', function () { document.getElementById('add-graph-modal').classList.remove('hidden'); });
+    var filterBtn = document.getElementById('filter-btn');
+    if (filterBtn) filterBtn.addEventListener('click', function () {
         const m = document.getElementById('filters-modal');
-        m.classList.remove('hidden');
-        m.classList.add('flex');
+        if (m) { m.classList.remove('hidden'); m.classList.add('flex'); }
     });
-    document.getElementById('close-add-graph-modal').addEventListener('click', function () { document.getElementById('add-graph-modal').classList.add('hidden'); });
-    document.getElementById('close-filters-modal').addEventListener('click', function () {
+    var closeAddGraphModal = document.getElementById('close-add-graph-modal');
+    if (closeAddGraphModal) closeAddGraphModal.addEventListener('click', function () { document.getElementById('add-graph-modal').classList.add('hidden'); });
+    var closeFiltersModal = document.getElementById('close-filters-modal');
+    if (closeFiltersModal) closeFiltersModal.addEventListener('click', function () {
         const m = document.getElementById('filters-modal');
-        m.classList.add('hidden');
-        m.classList.remove('flex');
+        if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
     });
-    document.getElementById('cancel-graph').addEventListener('click', function () { document.getElementById('add-graph-modal').classList.add('hidden'); });
-    document.getElementById('cancel-filters').addEventListener('click', function () {
+    var cancelGraph = document.getElementById('cancel-graph');
+    if (cancelGraph) cancelGraph.addEventListener('click', function () { document.getElementById('add-graph-modal').classList.add('hidden'); });
+    var cancelFilters = document.getElementById('cancel-filters');
+    if (cancelFilters) cancelFilters.addEventListener('click', function () {
         const m = document.getElementById('filters-modal');
-        m.classList.add('hidden');
-        m.classList.remove('flex');
+        if (m) { m.classList.add('hidden'); m.classList.remove('flex'); }
     });
     document.querySelectorAll('.graph-preset[data-type]').forEach(function (p) { p.addEventListener('click', function () { document.querySelectorAll('.graph-preset[data-type]').forEach(function (x) { x.classList.remove('selected'); }); this.classList.add('selected'); }); });
     document.querySelectorAll('.graph-preset[data-preset]').forEach(function (p) { p.addEventListener('click', function () { document.querySelectorAll('.graph-preset[data-preset]').forEach(function (x) { x.classList.remove('selected'); }); this.classList.add('selected'); }); });
-    document.getElementById('create-graph').addEventListener('click', function () {
+    var createGraph = document.getElementById('create-graph');
+    if (createGraph) createGraph.addEventListener('click', function () {
         var st = document.querySelector('.graph-preset[data-type].selected');
         if (!st) { showToast('Please select a graph type', 'warning'); return; }
+
+        var xAxisElement = document.getElementById('graph-x-axis');
+        var yAxisElement = document.getElementById('graph-y-axis');
+        var timeRangeElement = document.getElementById('graph-time-range');
+
+        var xAxisValue = xAxisElement ? xAxisElement.value : 'Time (Days)';
+        var yAxisValue = yAxisElement ? yAxisElement.value : 'Completion Rate';
+        var timeRangeValue = timeRangeElement ? timeRangeElement.value : 'Last 7 Days';
+
         var sp = document.querySelector('.graph-preset[data-preset].selected');
         var type = st.getAttribute('data-type');
-        addGraph(type, type.charAt(0).toUpperCase() + type.slice(1) + ' Analysis', 'Last 7 Days', 'Completion Rate', sp ? sp.getAttribute('data-preset') : 'blue-purple');
+
+        var title = yAxisValue + ' by ' + xAxisValue;
+
+        addGraph(type, title, timeRangeValue, yAxisValue, sp ? sp.getAttribute('data-preset') : 'blue-purple');
         document.getElementById('add-graph-modal').classList.add('hidden');
         saveState();
     });
-    document.getElementById('apply-filters').addEventListener('click', function () {
+    var applyFilters = document.getElementById('apply-filters');
+    if (applyFilters) applyFilters.addEventListener('click', function () {
         var tr = document.querySelector('.filter-btn.selected');
         appState.activeFilters = {
             timeRange: tr ? tr.getAttribute('data-filter') : null,
-            categories: [], // Placeholder for future category filtering
+            categories: [],
             status: []
         };
         showToast('Filters applied!', 'success');
-        document.getElementById('filters-modal').classList.add('hidden');
+        var fm = document.getElementById('filters-modal');
+        if (fm) fm.classList.add('hidden');
         renderAdditionalGraphs();
     });
 
@@ -1684,23 +1748,80 @@ document.addEventListener('DOMContentLoaded', function () {
             this.classList.add('selected', 'bg-green-100', 'border-green-500', 'text-green-700');
         });
     });
-    var ts = document.querySelector('#settings-page select');
+    // --- Theme Select ---
+    var ts = document.getElementById('theme-select');
     if (ts) {
+        // Initialize to current theme
         if (appState.darkMode) ts.value = 'Dark';
+        else ts.value = 'Light';
         ts.addEventListener('change', function () {
             if (this.value === 'Dark') setDarkMode(true);
             else if (this.value === 'Light') setDarkMode(false);
             else { setDarkMode(window.matchMedia('(prefers-color-scheme: dark)').matches); }
         });
     }
+
+    // --- Notification toggle: show/hide reminder time ---
+    var dailyReminderToggle = document.getElementById('notif-daily-reminder');
+    var reminderTimeContainer = document.getElementById('reminder-time-container');
+    if (dailyReminderToggle) {
+        // Initialize from state
+        dailyReminderToggle.checked = appState.notifSettings.dailyReminder;
+        if (appState.notifSettings.dailyReminder && reminderTimeContainer) reminderTimeContainer.classList.remove('hidden');
+        dailyReminderToggle.addEventListener('change', function () {
+            if (reminderTimeContainer) {
+                if (this.checked) reminderTimeContainer.classList.remove('hidden');
+                else reminderTimeContainer.classList.add('hidden');
+            }
+        });
+    }
+    // Initialize other notification toggles
+    var streakAlertToggle = document.getElementById('notif-streak-alert');
+    if (streakAlertToggle) streakAlertToggle.checked = appState.notifSettings.streakAlert;
+    var achievementToggle = document.getElementById('notif-achievements');
+    if (achievementToggle) achievementToggle.checked = appState.notifSettings.achievementNotifs;
+    var weeklySummaryToggle = document.getElementById('notif-weekly-summary');
+    if (weeklySummaryToggle) weeklySummaryToggle.checked = appState.notifSettings.weeklySummary;
+    var reminderTimeSelect = document.getElementById('notif-reminder-time');
+    if (reminderTimeSelect && appState.notifSettings.reminderTime) {
+        reminderTimeSelect.value = appState.notifSettings.reminderTime;
+    }
+
+    // --- Save Settings ---
     document.getElementById('save-settings-btn').addEventListener('click', function () {
+        // Save notification settings
+        var dr = document.getElementById('notif-daily-reminder');
+        var sa = document.getElementById('notif-streak-alert');
+        var an = document.getElementById('notif-achievements');
+        var ws = document.getElementById('notif-weekly-summary');
+        var rt = document.getElementById('notif-reminder-time');
+
+        appState.notifSettings = {
+            dailyReminder: dr ? dr.checked : false,
+            reminderTime: rt ? parseInt(rt.value) : 9,
+            streakAlert: sa ? sa.checked : false,
+            achievementNotifs: an ? an.checked : true,
+            weeklySummary: ws ? ws.checked : false
+        };
+
         saveState();
-        var notif = document.getElementById('notifications').checked;
-        if (notif && "Notification" in window && Notification.permission !== "granted") {
+
+        // Request notification permission if any notification is enabled
+        var anyEnabled = appState.notifSettings.dailyReminder || appState.notifSettings.streakAlert ||
+            appState.notifSettings.achievementNotifs || appState.notifSettings.weeklySummary;
+        if (anyEnabled && "Notification" in window && Notification.permission !== "granted") {
             Notification.requestPermission().then(function (permission) {
-                if (permission === "granted") showToast('Notifications enabled!', 'success');
+                if (permission === "granted") {
+                    showToast('Notifications enabled!', 'success');
+                    scheduleNotifications();
+                } else {
+                    showToast('Notification permission denied. You can enable it in browser settings.', 'warning');
+                }
             });
+        } else if (anyEnabled && "Notification" in window && Notification.permission === "granted") {
+            scheduleNotifications();
         }
+
         showToast('Settings saved!', 'success');
     });
     document.getElementById('export-data-btn').addEventListener('click', exportData);
@@ -1899,6 +2020,7 @@ document.addEventListener('DOMContentLoaded', async function () {
         renderCalendar();
         renderAchievements();
         setDailyQuote();
+        updateProfileUI();
     }
 });
 
@@ -1938,24 +2060,155 @@ function updateProfileUI() {
     const emailDisplay = document.getElementById('user-email-display');
     const signInBtn = document.getElementById('nav-signin');
     const signOutBtn = document.getElementById('nav-signout');
+    const profileName = document.getElementById('profile-user-name');
+    const profileMemberSince = document.getElementById('profile-member-since');
+    const profileGemCount = document.getElementById('profile-gem-count');
+    const profileLevel = document.getElementById('profile-level-display');
+    const settingsEmail = document.getElementById('settings-email');
+    const settingsAccountStatus = document.getElementById('settings-account-status');
 
     if (currentUser) {
+        var displayName = currentUser.user_metadata && currentUser.user_metadata.full_name
+            ? currentUser.user_metadata.full_name
+            : currentUser.email.split('@')[0];
         if (emailDisplay) emailDisplay.textContent = currentUser.email;
-        if (signInBtn) signInBtn.classList.add('hidden'); // Hide Sign In
-        if (signOutBtn) signOutBtn.classList.remove('hidden'); // Show Sign Out
+        if (profileName) profileName.textContent = displayName;
+        if (profileMemberSince) {
+            var joinDate = new Date(currentUser.created_at);
+            var months = ['January', 'February', 'March', 'April', 'May', 'June',
+                'July', 'August', 'September', 'October', 'November', 'December'];
+            profileMemberSince.textContent = 'Member since ' + months[joinDate.getMonth()] + ' ' + joinDate.getFullYear();
+        }
+        if (signInBtn) signInBtn.classList.add('hidden');
+        if (signOutBtn) signOutBtn.classList.remove('hidden');
+        if (settingsEmail) { settingsEmail.value = currentUser.email; }
+        if (settingsAccountStatus) {
+            settingsAccountStatus.innerHTML = '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-100 text-green-700"><i class="fas fa-check-circle mr-1"></i> Signed In</span>';
+        }
     } else {
         if (emailDisplay) emailDisplay.textContent = 'Guest User';
-        if (signInBtn) signInBtn.classList.remove('hidden'); // Show Sign In
-        if (signOutBtn) signOutBtn.classList.add('hidden'); // Hide Sign Out
+        if (profileName) profileName.textContent = 'Guest User';
+        if (profileMemberSince) profileMemberSince.textContent = 'Not signed in';
+        if (signInBtn) signInBtn.classList.remove('hidden');
+        if (signOutBtn) signOutBtn.classList.add('hidden');
+        if (settingsEmail) { settingsEmail.value = ''; settingsEmail.placeholder = 'Not signed in'; }
+        if (settingsAccountStatus) {
+            settingsAccountStatus.innerHTML = '<span class="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-gray-100 text-gray-600"><i class="fas fa-user-slash mr-1"></i> Guest Mode</span>';
+        }
+    }
+
+    // Sync stats from appState (always, regardless of auth)
+    if (profileGemCount) profileGemCount.textContent = appState.gems + ' Gems';
+    if (profileLevel) profileLevel.textContent = 'Level ' + appState.level;
+}
+
+// ===== NOTIFICATION SYSTEM =====
+var _notifTimers = [];
+
+function sendNotification(title, body, icon) {
+    if ("Notification" in window && Notification.permission === "granted") {
+        try {
+            new Notification(title, {
+                body: body,
+                icon: icon || "https://cdn-icons-png.flaticon.com/512/2917/2917995.png",
+                badge: "https://cdn-icons-png.flaticon.com/512/2917/2917995.png"
+            });
+        } catch (e) {
+            console.error("Failed to send notification:", e);
+        }
     }
 }
+
+function scheduleNotifications() {
+    // Clear any existing timers
+    _notifTimers.forEach(function (t) { clearTimeout(t); clearInterval(t); });
+    _notifTimers = [];
+
+    if (!appState.notifSettings) return;
+
+    // --- Daily Reminder ---
+    if (appState.notifSettings.dailyReminder) {
+        var now = new Date();
+        var reminderHour = appState.notifSettings.reminderTime || 9;
+        var nextReminder = new Date();
+        nextReminder.setHours(reminderHour, 0, 0, 0);
+        if (nextReminder <= now) {
+            nextReminder.setDate(nextReminder.getDate() + 1);
+        }
+        var msUntilReminder = nextReminder - now;
+        var dailyTimerId = setTimeout(function () {
+            var incomplete = appState.habits.filter(function (h) { return !h.completedToday; }).length;
+            if (incomplete > 0) {
+                sendNotification(
+                    "⏰ Time to build your habits!",
+                    "You have " + incomplete + " habit" + (incomplete > 1 ? 's' : '') + " to complete today. Keep your streak going!"
+                );
+            }
+            var dailyInterval = setInterval(function () {
+                var inc = appState.habits.filter(function (h) { return !h.completedToday; }).length;
+                if (inc > 0) {
+                    sendNotification(
+                        "⏰ Time to build your habits!",
+                        "You have " + inc + " habit" + (inc > 1 ? 's' : '') + " to complete today. Keep your streak going!"
+                    );
+                }
+            }, 24 * 60 * 60 * 1000);
+            _notifTimers.push(dailyInterval);
+        }, msUntilReminder);
+        _notifTimers.push(dailyTimerId);
+    }
+
+    // --- Streak At-Risk Alert (fires at 9 PM if habits not done) ---
+    if (appState.notifSettings.streakAlert && appState.currentStreak > 0) {
+        var now2 = new Date();
+        var streakAlert = new Date();
+        streakAlert.setHours(21, 0, 0, 0);
+        if (streakAlert <= now2) {
+            streakAlert.setDate(streakAlert.getDate() + 1);
+        }
+        var msUntilAlert = streakAlert - now2;
+        var streakTimerId = setTimeout(function () {
+            if (!appState.completedToday && appState.currentStreak > 0) {
+                sendNotification(
+                    "🔥 Your " + appState.currentStreak + "-day streak is at risk!",
+                    "Complete your habits before midnight to keep your streak alive!"
+                );
+            }
+        }, msUntilAlert);
+        _notifTimers.push(streakTimerId);
+    }
+
+    // --- Weekly Summary (fires Sunday 10 AM) ---
+    if (appState.notifSettings.weeklySummary) {
+        var now3 = new Date();
+        var nextSunday = new Date();
+        nextSunday.setDate(nextSunday.getDate() + (7 - nextSunday.getDay()) % 7);
+        nextSunday.setHours(10, 0, 0, 0);
+        if (nextSunday <= now3) nextSunday.setDate(nextSunday.getDate() + 7);
+        var msUntilSunday = nextSunday - now3;
+        var weeklyTimerId = setTimeout(function () {
+            var completedDays = Object.values(appState.completedDays).filter(function (v) { return v === 'completed'; }).length;
+            sendNotification(
+                "📊 Weekly Summary",
+                "You completed all habits on " + completedDays + " days this week. Current streak: " + appState.currentStreak + " days!"
+            );
+        }, msUntilSunday);
+        _notifTimers.push(weeklyTimerId);
+    }
+}
+
+// Start notifications on load if permissions already granted
+document.addEventListener('DOMContentLoaded', function () {
+    if ("Notification" in window && Notification.permission === "granted") {
+        setTimeout(function () { scheduleNotifications(); }, 2000);
+    }
+});
 
 // Modal Controls
 function openAuthModal() {
     const modal = document.getElementById('auth-modal');
     modal.classList.remove('hidden');
     modal.classList.add('flex');
-    // Default to Login
     isLoginMode = true;
     updateAuthModalUI();
 }
@@ -1965,6 +2218,7 @@ function closeAuthModal() {
     modal.classList.add('hidden');
     modal.classList.remove('flex');
     document.getElementById('auth-error').classList.add('hidden');
+    document.getElementById('resend-email-container')?.classList.add('hidden');
     document.getElementById('auth-form').reset();
 }
 
@@ -2015,12 +2269,10 @@ document.getElementById('auth-form')?.addEventListener('submit', async function 
         if (isLoginMode) {
             await authLogin(email, password);
             showToast('Welcome back! Syncing...', 'success');
-            setTimeout(() => window.location.reload(), 1000); // Reload to load cloud data
+            setTimeout(() => window.location.reload(), 1000);
         } else {
             await authSignup(email, password);
             showToast('Account created! Please check your email.', 'success');
-            // Supabase usually requires email confirmation, or auto-logs in. 
-            // If default config, it might auto-login.
             setTimeout(() => window.location.reload(), 1500);
         }
         closeAuthModal();
@@ -2028,9 +2280,68 @@ document.getElementById('auth-form')?.addEventListener('submit', async function 
         console.error(err);
         errorText.textContent = err.message || "Authentication failed";
         errorBox.classList.remove('hidden');
+
+        // Show resend confirmation email link if the error is about unconfirmed email
+        const resendContainer = document.getElementById('resend-email-container');
+        const resendStatus = document.getElementById('resend-email-status');
+        if (resendContainer) {
+            const msg = (err.message || '').toLowerCase();
+            if (msg.includes('email not confirmed') || msg.includes('email_not_confirmed')) {
+                resendContainer.classList.remove('hidden');
+                resendContainer.dataset.email = email; // Store email for resend
+                if (resendStatus) resendStatus.textContent = '';
+            } else {
+                resendContainer.classList.add('hidden');
+            }
+        }
     } finally {
         submitBtn.disabled = false;
         submitBtn.textContent = isLoginMode ? 'Sign In' : 'Sign Up';
+    }
+});
+
+// Resend Confirmation Email Handler
+document.getElementById('resend-email-btn')?.addEventListener('click', async function (e) {
+    e.preventDefault();
+    const resendContainer = document.getElementById('resend-email-container');
+    const resendStatus = document.getElementById('resend-email-status');
+    const email = resendContainer?.dataset.email;
+
+    if (!email) {
+        if (resendStatus) {
+            resendStatus.textContent = 'No email address found. Please try logging in again.';
+            resendStatus.className = 'text-sm mt-1 block text-red-500';
+        }
+        return;
+    }
+
+    // Disable the link temporarily
+    this.style.pointerEvents = 'none';
+    this.style.opacity = '0.5';
+    if (resendStatus) {
+        resendStatus.textContent = 'Sending...';
+        resendStatus.className = 'text-sm mt-1 block text-gray-500 dark:text-gray-400';
+    }
+
+    try {
+        await resendConfirmationEmail(email);
+        if (resendStatus) {
+            resendStatus.textContent = '✅ Confirmation email sent! Please check your inbox.';
+            resendStatus.className = 'text-sm mt-1 block text-green-600';
+        }
+        showToast('Confirmation email resent! Check your inbox.', 'success');
+    } catch (err) {
+        console.error('Resend email error:', err);
+        if (resendStatus) {
+            resendStatus.textContent = '❌ ' + (err.message || 'Failed to resend email. Please try again.');
+            resendStatus.className = 'text-sm mt-1 block text-red-500';
+        }
+    } finally {
+        // Re-enable after a delay to prevent spam
+        setTimeout(() => {
+            this.style.pointerEvents = '';
+            this.style.opacity = '';
+        }, 30000); // 30 second cooldown
     }
 });
 

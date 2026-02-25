@@ -39,6 +39,15 @@ async function authLogout() {
     window.location.reload(); // Reload to clear state/reset to guest
 }
 
+async function resendConfirmationEmail(email) {
+    const { data, error } = await supabaseClient.auth.resend({
+        type: 'signup',
+        email: email
+    });
+    if (error) throw error;
+    return data;
+}
+
 async function getUser() {
     const { data: { user } } = await supabaseClient.auth.getUser();
     return user;
@@ -52,7 +61,7 @@ function onAuthChange(callback) {
 
 // ---- DATA SYNC (Cloud vs Local) ----
 
-const TABLE_NAME = 'geo_flashcard_app_user_progress'; // Reusing existing table for now
+const TABLE_NAME = 'user_progress'; // Reusing existing table for now
 const COLUMN_NAME = 'study_data'; // Reusing existing column
 
 async function loadUserData(userId) {
